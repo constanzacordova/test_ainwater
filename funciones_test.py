@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.graph_objects as go
+import plotly.express as px
+from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
 ### Función que entrega histogramas para las variables estadisticas del data set, es decir DO level, H2O Level y Blower Hz
@@ -47,7 +49,6 @@ def historico_variables(df):
     fig.add_trace(go.Scatter(x=df['date_time'], y= df['blower_hz'], name= 'Blower Hz', yaxis= 'y3'))
 
     fig.update_layout(title_text = 'Históricos del proceso')
-
 
     # Ejes del gráfico
     fig.update_layout(
@@ -147,7 +148,8 @@ def historico_variables(df):
         ),
     )
 
-    fig.show()
+    return fig
+
 
 # Función para obtener el histograma con la distribución de una variable categorizada por ciclo
 def distribucion_clase(dataframe, variable, categoria, clase, titulo):
@@ -249,10 +251,140 @@ def transformar_dataframe(df):
     df_resume_cycle = df_resume_cycle.rename_axis('ciclo').reset_index()
     return df_resume_cycle
 
-def matriz_kmeans(df):
+def matriz_kmeans(df_resume_cycle):
     '''
     Genera matriz estandarizada para ser utilizada en el modelo kmeans de clusterización de ciclos
     se debe entregar como input el dataframe retornado por la funcion transformar_dataframe  
     '''
-    X_matrix = StandardScaler().fit_transform(df.iloc[:, 1:5])
+    X_matrix = StandardScaler().fit_transform(df_resume_cycle.iloc[:, 1:5])
     return X_matrix
+
+def colors(df_resume_cycle):
+    colors = ['',]*len(df_resume_cycle)
+
+    for i, t in enumerate(df_resume_cycle['time_of_day']):
+        
+        if t == 'Mañana':
+            colors[i] = 'LightBlue'
+            
+        elif t == 'Media-Mañana':
+            colors[i] = 'skyblue'
+        
+        elif t == 'Tarde':
+            colors[i] = 'slateblue'
+            
+        elif t == 'Noche':
+            colors[i] = 'darkslateblue'
+            
+        elif t == 'Madrugada':
+            colors[i] = 'lightskyblue'
+    return colors
+
+
+def resume_cycle(df_resume_cycle, colors):
+    fig_blower_cycle = go.Figure()       
+    fig_blower_cycle.add_trace(go.Bar(x=[df_resume_cycle['inicio_ciclo'].dt.date,df_resume_cycle['ciclo']], y=df_resume_cycle['total_hz'], marker_color= colors))
+    fig_blower_cycle.update_layout( title_text='Hz totales por ciclo')
+    
+
+    fig_h2o_cycle = go.Figure()     
+    fig_h2o_cycle.add_trace(go.Bar(x=[df_resume_cycle['inicio_ciclo'].dt.date,df_resume_cycle['ciclo']], y=df_resume_cycle['h2o_mean'], marker_color= colors))
+    fig_h2o_cycle.update_layout( title_text='Nivel medio de agua por ciclo')
+    fig_h2o_cycle.update_layout(yaxis= dict(range=[4, 5.2]))
+
+    fig_do_cycle = go.Figure()     
+    fig_do_cycle.add_trace(go.Bar(x=[df_resume_cycle['inicio_ciclo'].dt.date,df_resume_cycle['ciclo']], y=df_resume_cycle['do_mean'], marker_color= colors))
+    fig_do_cycle.update_layout( title_text='Nivel medio de oxigeno por ciclo')
+
+    return fig_blower_cycle, fig_h2o_cycle, fig_do_cycle
+
+
+def matriz_turnos(df_resume_cycle):
+    # Nuevo df con columnas que se usarán en el análisis
+    df_heatmap = df_resume_cycle.loc[ :, ['inicio_ciclo', 'time_of_day','total_hz']]
+
+
+    # Se generará un arreglo que permita agrupar en listas los valores Hz del soplador de los ciclos de 1 día 
+    previous_date = df_heatmap['inicio_ciclo'].dt.date.iloc[0]
+    global_list = []
+    pre_list = []
+    day_week = []
+
+    for row, value in enumerate(df_heatmap['total_hz']):
+    
+        now_date = df_heatmap['inicio_ciclo'].dt.date.iloc[row]
+        
+        if now_date!= previous_date:           
+            day_week.append(str(previous_date))
+            previous_date = df_heatmap['inicio_ciclo'].dt.date.iloc[row]
+            global_list.append(pre_list)
+            pre_list = []
+            
+        pre_list.append(value)
+        if previous_date is not None:
+            day_week.append(str(previous_date))
+            global_list.append(pre_list)
+
+    # Se realiza un diccionario con llave: día de la semana y valor: hz del soplador    
+    dict_data = dict(zip(day_week, global_list))
+    dict_data
+
+    # Se crea dataframe a partir del diccionario obtendo con indice de los turnos de cada ciclo
+    df_heatmap_matrix = pd.DataFrame(dict_data, index = df_heatmap['time_of_day'].unique())
+
+    return df_heatmap, df_heatmap_matrix
+
+def heatmap(df_heatmap_matrix):
+    fig_heatmap = px.imshow( df_heatmap_matrix, labels=dict(x="Fecha", y="Momento del dia", color="Hz Soplador"),)
+    fig_heatmap.update_layout( title_text='Mapa de calor consumo energético por dia y momento del día')
+    return fig_heatmap
+
+def scatter_hz(df_heatmap):
+    fig_scatter = px.scatter(df_heatmap, x = df_heatmap['inicio_ciclo'].dt.date, y = 'total_hz', color= 'time_of_day')
+    fig_scatter.update_layout( title_text='Hz totales por día y momento del día') 
+    return fig_scatter 
+
+def oxigeno_medio(df_resume_cycle):
+    fig_mean_do = go.Figure()
+    fig_mean_do.add_trace(go.Bar(name='Media general', x= df_resume_cycle['ciclo'], y=df_resume_cycle['do_mean']))
+    fig_mean_do.add_trace(go.Bar(name='Media con blower_hz >0', x=df_resume_cycle['ciclo'], y=df_resume_cycle['do_mean_blwon']))
+    fig_mean_do.update_layout(title_text='Media de Nivel de oxigeno por ciclo')
+    fig_mean_do.update_layout(xaxis = dict( autorange = False, range =[-0.5, 4.5], 
+                                       rangeslider = dict(autorange= False, range = [-0.5, 34.5])))
+    return fig_mean_do
+
+
+def elbow_graph(X_matrix):
+    # generamos array para guardar los resultados de la inercia.
+    inertia = []
+    # Se evaluará con 7 cluster
+    for i in range(1, 8):
+    # Agregamos la inercia
+        inertia.append(KMeans(n_clusters=i).fit(X_matrix).inertia_)
+    # graficamos el resultado
+    fig = plt.figure()
+    plt.plot(range(1, 8), inertia, 'o-', color='tomato')
+    plt.xlabel("Cantidad de clusters")
+    plt.ylabel("Inercia")
+    return fig
+
+def label_cluster(kmeans_model, df_resume_cycle):
+    C = kmeans_model.cluster_centers_
+    color_label = ['blue', 'red']
+    cluster_label = ['cluster 1', 'cluster 2']
+    asigna_color = []
+    cluster_ciclo = []
+
+
+    for i in kmeans_model.labels_:
+        asigna_color.append(color_label[i])
+        cluster_ciclo.append(cluster_label[i])
+
+    df_resume_cycle['cluster'] = pd.Series(cluster_ciclo, dtype="str")
+    return df_resume_cycle, asigna_color, C
+
+def grafico_cluster(X_matrix, C, color, var1, var2):
+    fig = plt.figure()
+    plt.scatter(X_matrix[:,var1], X_matrix[:,var2], c=color)
+    plt.scatter(C[:,var1], C[:,var2], marker='o', s=80)
+    return fig
